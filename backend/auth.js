@@ -42,7 +42,6 @@ async function loginToAngelOne() {
 async function placeOrder(symbol, token, quantity, transactionType) {
   try {
     if (!smartApi || !tokens) {
-      console.log('Not logged in. Logging in first...');
       await loginToAngelOne();
     }
 
@@ -59,7 +58,6 @@ async function placeOrder(symbol, token, quantity, transactionType) {
     };
 
     console.log('Placing order:', orderData);
-
     const response = await smartApi.placeOrder(orderData);
     console.log('Order response:', JSON.stringify(response, null, 2));
     return response;
@@ -70,4 +68,27 @@ async function placeOrder(symbol, token, quantity, transactionType) {
   }
 }
 
-module.exports = { loginToAngelOne, placeOrder };
+async function getLTP(exchange, symbol, token) {
+  try {
+    if (!smartApi || !tokens) {
+      await loginToAngelOne();
+    }
+
+    const response = await smartApi.getLTP({
+      exchange: exchange,
+      tradingsymbol: symbol,
+      symboltoken: token
+    });
+
+    if (response && response.status === true) {
+      return response.data.ltp;
+    }
+    return null;
+
+  } catch (error) {
+    console.log('LTP error:', error.message);
+    return null;
+  }
+}
+
+module.exports = { loginToAngelOne, placeOrder, getLTP };
