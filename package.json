@@ -2,5 +2,7 @@
   "dependencies": {
     "smartapi-javascript": "^1.0.27",
     "speakeasy": "^2.0.0"
+    "node-cron": "^4.2.1",
+    "smartapi-javascript": "^1.0.27"
   }
 }
