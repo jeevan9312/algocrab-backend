@@ -15,7 +15,11 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "node-cron": "^4.2.1",
+    "nse-js": "^0.0.9",
+    "puppeteer-core": "^25.2.1",
     "smartapi-javascript": "^1.0.27",
-    "speakeasy": "^2.0.0"
+    "speakeasy": "^2.0.0",
+    "stock-nse-india": "^1.4.0",
+    "ws": "^8.21.0"
   }
 }
