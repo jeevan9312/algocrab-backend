@@ -1,12 +1,15 @@
-const { connectWebSocket, subscribeToTokens, getLivePrice, getIsConnected } = require('./marketdata');
+const dotenv = require('dotenv');
+dotenv.config();
 
 const express = require('express');
-const dotenv = require('dotenv');
 const cron = require('node-cron');
+const axios = require('axios');
+
+const { connectDB } = require('./database');
+const { registerUser, loginUser, verifyToken, resetStrategy } = require('./auth_users');
+const { connectWebSocket, subscribeToTokens, getLivePrice, getIsConnected } = require('./marketdata');
 const { loginToAngelOne, getNiftyPrice, placeOrder } = require('./auth');
 const { calculateATMStrike, fetchOptionChain, findStrikes, executeStrategy, monitorPnL, exitAllLegs, tradeState, STRATEGY_CONFIG } = require('./strategy');
-const axios = require('axios');
-dotenv.config();
 
 const app = express();
 app.use(express.json());
@@ -41,7 +44,7 @@ app.get('/test/optionchain', async (req, res) => {
   if (!price) return res.json({ success: false, message: 'Could not fetch Nifty price' });
 
   const atm = calculateATMStrike(price);
-  const expiry = getNextExpiry();
+  const expiry = await getNextExpiry();
 
   console.log('Testing option chain fetch for expiry:', expiry);
   const chain = await fetchOptionChain(atm, expiry);
@@ -77,21 +80,10 @@ app.post('/exit', async (req, res) => {
 app.get('/test/websocket', async (req, res) => {
   try {
     await connectWebSocket();
-    
-    subscribeToTokens([
-      { exchangeType: 1, tokens: ['99926000'] }
-    ]);
-
+    subscribeToTokens([{ exchangeType: 1, tokens: ['99926000'] }]);
     await new Promise(resolve => setTimeout(resolve, 3000));
-
     const niftyPrice = getLivePrice('99926000');
-    
-    res.json({
-      success: true,
-      connected: getIsConnected(),
-      niftyPrice: niftyPrice
-    });
-
+    res.json({ success: true, connected: getIsConnected(), niftyPrice });
   } catch (error) {
     res.json({ success: false, error: error.message });
   }
@@ -114,14 +106,7 @@ app.get('/test/scripmaster', async (req, res) => {
     );
 
     console.log('Total NIFTY options found:', niftyOptions.length);
-
-    res.json({
-      success: true,
-      expiry: expiry,
-      totalOptions: niftyOptions.length,
-      sample: niftyOptions.slice(0, 5)
-    });
-
+    res.json({ success: true, expiry, totalOptions: niftyOptions.length, sample: niftyOptions.slice(0, 5) });
   } catch (error) {
     res.json({ success: false, error: error.message });
   }
@@ -130,8 +115,7 @@ app.get('/test/scripmaster', async (req, res) => {
 app.get('/test/fullchain', async (req, res) => {
   try {
     const expiry = await getNextExpiry();
-    
-    // Get all NIFTY option tokens for this expiry
+
     const scripResponse = await axios.get(
       'https://margincalculator.angelone.in/OpenAPI_File/files/OpenAPIScripMaster.json',
       { timeout: 30000 }
@@ -145,49 +129,27 @@ app.get('/test/fullchain', async (req, res) => {
 
     console.log('Total options to subscribe:', niftyOptions.length);
 
-    // Get all tokens
     const tokens = niftyOptions.map(o => o.token);
+    subscribeToTokens([{ exchangeType: 2, tokens }]);
 
-    // Subscribe via WebSocket
-    subscribeToTokens([{ exchangeType: 2, tokens: tokens }]);
-
-    // Wait 5 seconds for prices to come in
     await new Promise(resolve => setTimeout(resolve, 5000));
 
-    // Get current Nifty price
     const niftyPrice = await getNiftyPrice();
     const atmStrike = calculateATMStrike(niftyPrice);
 
-    console.log('Nifty price:', niftyPrice);
-    console.log('ATM strike:', atmStrike);
-
-    // Build option chain from live websocket data
     const chain = niftyOptions.map(o => {
       const strikeActual = parseFloat(o.strike) / 100;
       const ltp = getLivePrice(o.token);
       const type = o.symbol.endsWith('CE') ? 'CE' : 'PE';
-      return {
-        strike: strikeActual,
-        type: type,
-        token: o.token,
-        symbol: o.symbol,
-        ltp: ltp || 0
-      };
+      return { strike: strikeActual, type, token: o.token, symbol: o.symbol, ltp: ltp || 0 };
     }).filter(o => o.ltp > 0);
 
     console.log('Options with live prices:', chain.length);
 
-    // Find ATM and ₹10 premium strikes
     const atmCE = chain.find(o => o.strike === atmStrike && o.type === 'CE');
     const atmPE = chain.find(o => o.strike === atmStrike && o.type === 'PE');
-
-    const buyCE = chain
-      .filter(o => o.type === 'CE')
-      .sort((a, b) => Math.abs(a.ltp - 10) - Math.abs(b.ltp - 10))[0];
-
-    const buyPE = chain
-      .filter(o => o.type === 'PE')
-      .sort((a, b) => Math.abs(a.ltp - 10) - Math.abs(b.ltp - 10))[0];
+    const buyCE = chain.filter(o => o.type === 'CE').sort((a, b) => Math.abs(a.ltp - 10) - Math.abs(b.ltp - 10))[0];
+    const buyPE = chain.filter(o => o.type === 'PE').sort((a, b) => Math.abs(a.ltp - 10) - Math.abs(b.ltp - 10))[0];
 
     res.json({
       success: true,
@@ -201,42 +163,67 @@ app.get('/test/fullchain', async (req, res) => {
         buyPE: { strike: buyPE?.strike, ltp: buyPE?.ltp, token: buyPE?.token, symbol: buyPE?.symbol }
       }
     });
-
   } catch (error) {
     console.log('Full chain error:', error.message);
     res.json({ success: false, error: error.message });
   }
 });
 
+// ── USER AUTH ROUTES ──────────────────────────────────
+app.post('/auth/register', async (req, res) => {
+  const { name, email, password } = req.body;
+  if (!name || !email || !password) {
+    return res.json({ success: false, message: 'All fields are required' });
+  }
+  const result = await registerUser(name, email, password);
+  res.json(result);
+});
+
+app.post('/auth/login', async (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password) {
+    return res.json({ success: false, message: 'Email and password required' });
+  }
+  const result = await loginUser(email, password);
+  res.json(result);
+});
+
+app.post('/auth/verify', (req, res) => {
+  const { token } = req.body;
+  if (!token) return res.json({ success: false, message: 'No token provided' });
+  const result = verifyToken(token);
+  res.json(result);
+});
+
+app.post('/auth/reset', async (req, res) => {
+  const { token } = req.body;
+  const verify = verifyToken(token);
+  if (!verify.success) return res.json({ success: false, message: 'Unauthorized' });
+  const result = await resetStrategy(verify.user.userId);
+  res.json(result);
+});
+
 // ── SCHEDULER ─────────────────────────────────────────
 cron.schedule('* * * * *', async () => {
   const now = new Date();
   const currentTime = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-
   console.log(`Scheduler tick: ${currentTime}`);
 
   if (currentTime === STRATEGY_CONFIG.entryTime && !tradeState.isActive) {
     console.log('9:45 AM reached. Starting 945 Straddle execution...');
 
     const niftyPrice = await getNiftyPrice();
-    if (!niftyPrice) {
-      console.log('Failed to get Nifty price. Skipping today.');
-      return;
-    }
+    if (!niftyPrice) { console.log('Failed to get Nifty price. Skipping.'); return; }
 
     const atmStrike = calculateATMStrike(niftyPrice);
     const expiry = await getNextExpiry();
     const optionChain = await fetchOptionChain(atmStrike, expiry);
 
-    if (!optionChain) {
-      console.log('Failed to fetch option chain. Skipping today.');
-      return;
-    }
+    if (!optionChain) { console.log('Failed to fetch option chain. Skipping.'); return; }
 
     const strikes = findStrikes(optionChain, atmStrike, STRATEGY_CONFIG.targetPremium);
     if (!strikes.atmCE || !strikes.atmPE || !strikes.buyCE || !strikes.buyPE) {
-      console.log('Could not find all required strikes. Skipping today.');
-      return;
+      console.log('Could not find all required strikes. Skipping.'); return;
     }
 
     await executeStrategy(strikes);
@@ -247,9 +234,7 @@ cron.schedule('* * * * *', async () => {
     await exitAllLegs('TIME EXIT');
   }
 
-  if (tradeState.isActive) {
-    await monitorPnL();
-  }
+  if (tradeState.isActive) await monitorPnL();
 });
 
 // ── EXPIRY DETECTION ──────────────────────────────────
@@ -260,14 +245,12 @@ async function getNextExpiry() {
       { timeout: 30000 }
     );
 
-    // Get all NIFTY option expiries
     const expiries = [...new Set(
       response.data
         .filter(i => i.name === 'NIFTY' && i.instrumenttype === 'OPTIDX')
         .map(i => i.expiry)
     )];
 
-    // Sort by date and find nearest upcoming expiry
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
@@ -286,17 +269,21 @@ async function getNextExpiry() {
     const nearest = sortedExpiries[0].expiry;
     console.log('Nearest expiry from scrip master:', nearest);
     return nearest;
-
   } catch (error) {
     console.log('Error getting expiry:', error.message);
     return null;
   }
 }
+
 // ── STARTUP ───────────────────────────────────────────
 async function startup() {
   console.log('Starting AlgoCrab 945 Straddle Engine...');
+
+  await connectDB();
+
   const result = await loginToAngelOne();
   if (result) {
+    await connectWebSocket();
     console.log('Engine ready. Waiting for 9:45 AM on expiry day...');
   } else {
     console.log('Login failed. Please check credentials.');

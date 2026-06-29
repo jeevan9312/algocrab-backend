@@ -12,8 +12,11 @@
   "license": "ISC",
   "dependencies": {
     "axios": "^1.16.1",
+    "bcryptjs": "^3.0.3",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "mongoose": "^9.7.3",
     "node-cron": "^4.2.1",
     "nse-js": "^0.0.9",
     "puppeteer-core": "^25.2.1",
