@@ -8,7 +8,7 @@ let marketData = {};
 let isConnected = false;
 let lastSubscribedTokens = [];
 let reconnectAttempts = 0;
-const MAX_RECONNECT_ATTEMPTS = 10;
+const MAX_RECONNECT_ATTEMPTS = 3;
 
 function connectWebSocket() {
   return new Promise((resolve, reject) => {
@@ -105,7 +105,7 @@ function attemptReconnect() {
     return;
   }
   reconnectAttempts++;
-  const delay = Math.min(2000 * reconnectAttempts, 15000);
+  const delay = Math.min(30000 * reconnectAttempts, 120000);
   console.log(`Reconnecting WebSocket in ${delay / 1000}s (attempt ${reconnectAttempts})...`);
   setTimeout(() => {
     connectWebSocket().catch(err => {
