@@ -15,10 +15,21 @@ const { paperTradeState, executePaperStrategy, monitorPaperPnL, exitPaperTrade, 
 const app = express();
 app.use(express.json());
 
+
 // ── TRADING MODE ──────────────────────────────────────
 let TRADING_MODE = 'PAPER';
 
 // ── ROUTES ────────────────────────────────────────────
+app.get('/myip', async (req, res) => {
+  try {
+    const response = await axios.get('https://api.ipify.org?format=json');
+    res.json(response.data);
+  } catch (error) {
+    res.json({ error: error.message });
+  }
+});
+
+
 app.get('/', (req, res) => {
   res.json({ message: 'AlgoCrab 945 Straddle Engine Running' });
 });
