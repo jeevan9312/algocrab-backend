@@ -8,9 +8,10 @@ const userSchema = new mongoose.Schema({
   email: { type: String, required: true, unique: true, lowercase: true },
   password: { type: String, required: true },
   name: { type: String, required: true },
-  angelOneClientId: { type: String },
-  angelOnePassword: { type: String },
-  angelOneTotpSecret: { type: String },
+  angelOneClientId: { type: String, default: null },
+  angelOnePassword: { type: String, default: null },
+  angelOneTotpSecret: { type: String, default: null },
+  isAngelOneConnected: { type: Boolean, default: false },
   isActive: { type: Boolean, default: true },
   createdAt: { type: Date, default: Date.now }
 });

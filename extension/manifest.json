@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "AlgoCrab Smart Extension",
+  "version": "1.0",
+  "description": "Automated trading extension for AlgoCrab users",
+  "permissions": [
+    "storage",
+    "alarms",
+    "notifications"
+  ],
+  "action": {
+    "default_popup": "popup/index.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "host_permissions": [
+    "https://algocrab-backend.onrender.com/*",
+    "http://localhost:3000/*"
+  ]
+}

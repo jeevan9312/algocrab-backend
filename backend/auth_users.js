@@ -1,5 +1,5 @@
-const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
 const { User } = require('./database');
 const dotenv = require('dotenv');
 dotenv.config();
@@ -15,12 +15,7 @@ async function registerUser(name, email, password) {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    const user = new User({ 
-      name, 
-      email, 
-      password: hashedPassword 
-    });
-    
+    const user = new User({ name, email, password: hashedPassword });
     await user.save();
 
     console.log('New user registered:', email);
@@ -55,7 +50,11 @@ async function loginUser(email, password) {
     return {
       success: true,
       token,
-      user: { name: user.name, email: user.email }
+      user: {
+        name: user.name,
+        email: user.email,
+        isAngelOneConnected: user.isAngelOneConnected
+      }
     };
 
   } catch (error) {
@@ -74,6 +73,48 @@ function verifyToken(token) {
   }
 }
 
+// ── SAVE ANGEL ONE CREDENTIALS ────────────────────────
+async function saveAngelOneCredentials(userId, clientId, password, totpSecret) {
+  try {
+    await User.findByIdAndUpdate(userId, {
+      angelOneClientId: clientId,
+      angelOnePassword: password,
+      angelOneTotpSecret: totpSecret,
+      isAngelOneConnected: true
+    });
+
+    console.log('Angel One credentials saved for user:', userId);
+    return { success: true, message: 'Angel One account connected successfully' };
+
+  } catch (error) {
+    console.log('Save credentials error:', error.message);
+    return { success: false, message: 'Failed to save credentials' };
+  }
+}
+
+// ── GET USER ANGEL ONE CREDENTIALS ───────────────────
+async function getUserCredentials(userId) {
+  try {
+    const user = await User.findById(userId);
+    if (!user || !user.isAngelOneConnected) {
+      return { success: false, message: 'Angel One not connected' };
+    }
+
+    return {
+      success: true,
+      credentials: {
+        clientId: user.angelOneClientId,
+        password: user.angelOnePassword,
+        totpSecret: user.angelOneTotpSecret
+      }
+    };
+
+  } catch (error) {
+    console.log('Get credentials error:', error.message);
+    return { success: false, message: 'Failed to get credentials' };
+  }
+}
+
 // ── RESET STRATEGY ────────────────────────────────────
 async function resetStrategy(userId) {
   try {
@@ -84,4 +125,11 @@ async function resetStrategy(userId) {
   }
 }
 
-module.exports = { registerUser, loginUser, verifyToken, resetStrategy };
+module.exports = {
+  registerUser,
+  loginUser,
+  verifyToken,
+  saveAngelOneCredentials,
+  getUserCredentials,
+  resetStrategy
+};

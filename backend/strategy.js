@@ -1,4 +1,5 @@
 const { placeOrder, getTokens } = require('./auth');
+const { subscribeToTokens, getLivePrice } = require('./marketdata');
 const axios = require('axios');
 const dotenv = require('dotenv');
 dotenv.config();
@@ -10,7 +11,7 @@ const STRATEGY_CONFIG = {
   profitTarget: 1000,
   stopLoss: 1000,
   targetPremium: 10,
-  lotSize: 75,
+  lotSize: 65,
   lots: 1,
   instrument: 'NIFTY',
   exchange: 'NFO'
@@ -29,127 +30,67 @@ function calculateATMStrike(niftyPrice) {
   return atm;
 }
 
-// ── STEP 3: FETCH OPTION CHAIN FROM NSE ───────────────
+// ── STEP 3: FETCH OPTION CHAIN VIA ANGEL ONE WEBSOCKET ─
+// This is the proven working method - uses Angel One scrip master
+// for token list and WebSocket for live prices. No NSE scraping needed.
 async function fetchOptionChain(atmStrike, expiry) {
   try {
-    console.log('Fetching option chain from NSE...');
+    console.log('Fetching option chain via Angel One scrip master + WebSocket...');
 
-    const axiosInstance = axios.create({
-      timeout: 15000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept': '*/*',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Connection': 'keep-alive'
-      }
-    });
-
-    // Step 1 - Visit NSE homepage to get session cookies
-    console.log('Getting NSE session...');
-    const homeResponse = await axiosInstance.get('https://www.nseindia.com');
-    
-    const rawCookies = homeResponse.headers['set-cookie'] || [];
-    const cookieString = rawCookies.map(c => c.split(';')[0]).join('; ');
-    console.log('Session cookies obtained:', rawCookies.length, 'cookies');
-
-    // Step 2 - Wait 3 seconds
-    await new Promise(resolve => setTimeout(resolve, 3000));
-
-    // Step 3 - Fetch option chain
-    console.log('Fetching option chain data...');
-    const response = await axiosInstance.get(
-      'https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY',
-      {
-        headers: {
-          'Referer': 'https://www.nseindia.com/option-chain',
-          'Cookie': cookieString,
-          'X-Requested-With': 'XMLHttpRequest',
-          'sec-ch-ua': '"Chromium";v="124", "Google Chrome";v="124"',
-          'sec-ch-ua-mobile': '?0',
-          'sec-ch-ua-platform': '"Windows"',
-          'Sec-Fetch-Dest': 'empty',
-          'Sec-Fetch-Mode': 'cors',
-          'Sec-Fetch-Site': 'same-origin'
-        }
-      }
+    // Step 1 - Get all NIFTY option tokens for this expiry from scrip master
+    const scripResponse = await axios.get(
+      'https://margincalculator.angelone.in/OpenAPI_File/files/OpenAPIScripMaster.json',
+      { timeout: 30000 }
     );
 
-    console.log('NSE response status:', response.status);
-    console.log('Response type:', typeof response.data);
+    const niftyOptions = scripResponse.data.filter(item =>
+      item.name === 'NIFTY' &&
+      item.instrumenttype === 'OPTIDX' &&
+      item.expiry === expiry
+    );
 
-    if (response.data && response.data.records && response.data.records.data && response.data.records.data.length > 0) {
-      console.log('Option chain received. Total records:', response.data.records.data.length);
+    console.log('Total NIFTY options found for expiry', expiry, ':', niftyOptions.length);
 
-      const availableExpiries = [...new Set(response.data.records.data.map(i => i.expiryDate))];
-      console.log('Available expiries:', availableExpiries);
-
-      const expiryDate = formatExpiryForNSE(expiry);
-      console.log('Looking for expiry:', expiryDate);
-
-      let filtered = response.data.records.data.filter(item => item.expiryDate === expiryDate);
-
-      if (filtered.length === 0) {
-        console.log('Expiry not found. Using nearest available.');
-        filtered = response.data.records.data.filter(item => item.expiryDate === availableExpiries[0]);
-      }
-
-      console.log('Strikes found:', filtered.length);
-      return convertToOurFormat(filtered);
+    if (niftyOptions.length === 0) {
+      console.log('No options found for this expiry');
+      return null;
     }
 
-    console.log('Empty response. Data:', JSON.stringify(response.data).substring(0, 200));
-    return null;
+    // Step 2 - Subscribe to all these tokens via WebSocket
+    const tokens = niftyOptions.map(o => o.token);
+    subscribeToTokens([{ exchangeType: 2, tokens: tokens }]);
+
+    // Step 3 - Wait for live prices to come in
+    console.log('Waiting for live prices from WebSocket...');
+    await new Promise(resolve => setTimeout(resolve, 5000));
+
+    // Step 4 - Build option chain from live websocket data
+    const chain = niftyOptions.map(o => {
+      const strikeActual = parseFloat(o.strike) / 100;
+      const ltp = getLivePrice(o.token);
+      const type = o.symbol.endsWith('CE') ? 'CE' : 'PE';
+      return {
+        strikePrice: strikeActual,
+        optionType: type,
+        ltp: ltp || 0,
+        tradingSymbol: o.symbol,
+        symbolToken: o.token
+      };
+    }).filter(o => o.ltp > 0);
+
+    console.log('Options with live prices:', chain.length, 'out of', niftyOptions.length);
+
+    if (chain.length === 0) {
+      console.log('No live prices received. Market may be closed or WebSocket not subscribed in time.');
+      return null;
+    }
+
+    return chain;
 
   } catch (error) {
-    console.log('NSE fetch error:', error.message);
-    console.log('Status:', error.response?.status);
-    console.log('Response:', JSON.stringify(error.response?.data)?.substring(0, 200));
+    console.log('Error fetching option chain:', error.message);
     return null;
   }
-}
-
-// ── HELPER: CONVERT NSE FORMAT ────────────────────────
-function convertToOurFormat(data) {
-  const options = [];
-  for (const item of data) {
-    if (item.CE) {
-      options.push({
-        strikePrice: item.strikePrice,
-        optionType: 'CE',
-        ltp: item.CE.lastPrice,
-        tradingSymbol: `NIFTY${item.strikePrice}CE`,
-        symbolToken: ''
-      });
-    }
-    if (item.PE) {
-      options.push({
-        strikePrice: item.strikePrice,
-        optionType: 'PE',
-        ltp: item.PE.lastPrice,
-        tradingSymbol: `NIFTY${item.strikePrice}PE`,
-        symbolToken: ''
-      });
-    }
-  }
-  console.log('Total options converted:', options.length);
-  return options;
-}
-
-// ── HELPER: FORMAT EXPIRY FOR NSE ─────────────────────
-function formatExpiryForNSE(expiry) {
-  // Convert 02JUL26 to 02-Jul-2026
-  const day = expiry.substring(0, 2);
-  const monthStr = expiry.substring(2, 5);
-  const year = '20' + expiry.substring(5, 7);
-
-  const months = {
-    'JAN': 'Jan', 'FEB': 'Feb', 'MAR': 'Mar', 'APR': 'Apr',
-    'MAY': 'May', 'JUN': 'Jun', 'JUL': 'Jul', 'AUG': 'Aug',
-    'SEP': 'Sep', 'OCT': 'Oct', 'NOV': 'Nov', 'DEC': 'Dec'
-  };
-
-  return `${day}-${months[monthStr]}-${year}`;
 }
 
 // ── STEP 4: FIND RIGHT STRIKES ────────────────────────
@@ -197,7 +138,7 @@ function findStrikes(optionChain, atmStrike, targetPremium) {
   return { atmCE, atmPE, buyCE, buyPE };
 }
 
-// ── STEP 5: EXECUTE ALL 4 LEGS ────────────────────────
+// ── STEP 5: EXECUTE ALL 4 LEGS (LIVE MODE) ────────────
 async function executeStrategy(strikes) {
   const { atmCE, atmPE, buyCE, buyPE } = strikes;
   const quantity = STRATEGY_CONFIG.lotSize * STRATEGY_CONFIG.lots;
@@ -224,7 +165,7 @@ async function executeStrategy(strikes) {
   return results;
 }
 
-// ── STEP 6: MONITOR COMBINED PNL ──────────────────────
+// ── STEP 6: MONITOR COMBINED PNL (LIVE MODE) ──────────
 async function monitorPnL() {
   if (!tradeState.isActive) return;
 
@@ -242,7 +183,7 @@ async function monitorPnL() {
           'X-UserType': 'USER',
           'X-SourceID': 'WEB',
           'X-ClientLocalIP': '127.0.0.1',
-          'X-ClientPublicIP': '202.141.41.21',
+          'X-ClientPublicIP': '103.103.209.155',
           'X-MACAddress': '00:00:00:00:00:00',
           'X-PrivateKey': process.env.ANGEL_ONE_API_KEY
         }
@@ -272,7 +213,7 @@ async function monitorPnL() {
   }
 }
 
-// ── STEP 7: EXIT ALL LEGS ─────────────────────────────
+// ── STEP 7: EXIT ALL LEGS (LIVE MODE) ─────────────────
 async function exitAllLegs(reason) {
   if (!tradeState.isActive) return;
 

@@ -6,6 +6,9 @@ dotenv.config();
 let ws = null;
 let marketData = {};
 let isConnected = false;
+let lastSubscribedTokens = [];
+let reconnectAttempts = 0;
+const MAX_RECONNECT_ATTEMPTS = 10;
 
 function connectWebSocket() {
   return new Promise((resolve, reject) => {
@@ -33,6 +36,17 @@ function connectWebSocket() {
     ws.on('open', () => {
       console.log('WebSocket connected!');
       isConnected = true;
+      reconnectAttempts = 0;
+
+      // Re-subscribe to whatever we were subscribed to before (if reconnecting)
+      if (lastSubscribedTokens.length > 0) {
+        console.log('Re-subscribing to', lastSubscribedTokens.length, 'previous subscriptions...');
+        doSubscribe(lastSubscribedTokens);
+      }
+
+      // Start heartbeat ping every 25 seconds to keep connection alive
+      startHeartbeat();
+
       resolve(ws);
     });
 
@@ -52,14 +66,52 @@ function connectWebSocket() {
     ws.on('error', (error) => {
       console.log('WebSocket error:', error.message);
       isConnected = false;
-      reject(error);
     });
 
     ws.on('close', () => {
       console.log('WebSocket disconnected');
       isConnected = false;
+      stopHeartbeat();
+      attemptReconnect();
     });
   });
+}
+
+// ── HEARTBEAT TO KEEP CONNECTION ALIVE ────────────────
+let heartbeatInterval = null;
+function startHeartbeat() {
+  stopHeartbeat();
+  heartbeatInterval = setInterval(() => {
+    if (ws && isConnected) {
+      try {
+        ws.send('ping');
+      } catch (e) {
+        console.log('Heartbeat ping failed:', e.message);
+      }
+    }
+  }, 25000);
+}
+function stopHeartbeat() {
+  if (heartbeatInterval) {
+    clearInterval(heartbeatInterval);
+    heartbeatInterval = null;
+  }
+}
+
+// ── AUTO RECONNECT ─────────────────────────────────────
+function attemptReconnect() {
+  if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+    console.log('Max reconnect attempts reached. Giving up.');
+    return;
+  }
+  reconnectAttempts++;
+  const delay = Math.min(2000 * reconnectAttempts, 15000);
+  console.log(`Reconnecting WebSocket in ${delay / 1000}s (attempt ${reconnectAttempts})...`);
+  setTimeout(() => {
+    connectWebSocket().catch(err => {
+      console.log('Reconnect failed:', err);
+    });
+  }, delay);
 }
 
 function parseBinaryData(buffer) {
@@ -71,16 +123,15 @@ function parseBinaryData(buffer) {
 
     if (token && ltp > 0) {
       marketData[token] = ltp;
-      console.log(`Token: ${token} | LTP: ₹${ltp}`);
     }
   } catch (error) {
-    console.log('Parse error:', error.message);
+    // Skip parse errors silently to avoid log spam
   }
 }
 
-function subscribeToTokens(tokenList) {
+function doSubscribe(tokenList) {
   if (!ws || !isConnected) {
-    console.log('WebSocket not connected');
+    console.log('WebSocket not connected, cannot subscribe yet');
     return;
   }
 
@@ -95,6 +146,11 @@ function subscribeToTokens(tokenList) {
 
   ws.send(JSON.stringify(subscribeMsg));
   console.log('Subscribed to tokens:', tokenList.length, 'instruments');
+}
+
+function subscribeToTokens(tokenList) {
+  lastSubscribedTokens = tokenList;
+  doSubscribe(tokenList);
 }
 
 function getLivePrice(token) {
