@@ -1,4 +1,4 @@
-const BACKEND_URL = 'https://algocrab-backend-production.up.railway.app';
+const BACKEND_URL = 'https://algocrab-backend-production.up.railway.app'; 
 
 // ── SCREEN MANAGEMENT ─────────────────────────────────
 function showScreen(id) {

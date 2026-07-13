@@ -20,6 +20,15 @@ app.use(express.json());
 let TRADING_MODE = 'PAPER';
 
 // ── ROUTES ────────────────────────────────────────────
+app.get('/myip2', async (req, res) => {
+  try {
+    const response = await axios.get('https://ifconfig.me/ip');
+    res.json({ ip: response.data.trim() });
+  } catch (error) {
+    res.json({ error: error.message });
+  }
+});
+
 app.get('/myip', async (req, res) => {
   try {
     const response = await axios.get('https://api.ipify.org?format=json');
